@@ -1,51 +1,17 @@
 From Coq Require Import Arith.PeanoNat.
 From Coq Require Import Lists.List.
-
-(* XXX *)
-Set Debug Eauto.
-Set Debug Auto.
-
-(** ======================================================================== *)
-(** ** Tactics *)
-
-(** Destruct all hypotheses of the form [exists x, ...], while attempting
-    to preserve the name of the existensial variable. *)
-
-Ltac deex :=
-  repeat match goal with
-  | H: exists x, _ |- _ => let x' := fresh x in
-                           destruct H as [x' H]
-  end.
-
-(** Destruct all disjunctive hypotheses. *)
-
-Ltac deor :=
-  repeat match goal with
-  | H: _ \/ _ |- _ => destruct H
-  end.
-
-Ltac deand :=
-  repeat match goal with
-  | H: _ /\ _ |- _ => destruct H
-  end.
+From ChurchRosser Require Import Tactics.
 
 Create HintDb mltt.
 #[global] Hint Constants Opaque : mltt.
 #[global] Hint Variables Opaque : mltt.
 
-Inductive ty :=
-  | ty_func (a b : ty)
-  | ty_unit.
-
-Definition context := list ty.
-
-Inductive term : context -> ty -> Type :=
-  | tm_var : forall G a x,
-      nth_error G x = Some a -> term G a
-  | tm_app : forall G a b,
-      term G (ty_func a b) -> term G a -> term G b
-  | tm_abs : forall G a b,
-      term (a :: G) b -> term G (ty_func a b).
+Inductive term :=
+  | tm_type
+  | tm_var (x : nat)
+  | tm_app (t u : term)
+  | tm_prod (a b : term)
+  | tm_abs (a t : term).
 
 #[export] Hint Constructors term : mltt.
 
@@ -110,7 +76,6 @@ Proof.
   - exfalso. eauto.
 Qed.
 
-
 (** ------------------------------------------------------------------------ *)
 (** ** Small Step *)
 
@@ -118,12 +83,9 @@ Reserved Notation "t '⊳' u" (at level 60).
 Reserved Notation "t '⊳*' u" (at level 60).
 
 (** The definition of [step t u] guarantees that exactly one redex was
-    reduced in [t], yielding [u]. The definition of [step] is not reflexive.
-    It is not irreflexive either, because of the omega combinator. A well-typed
-    step is irreflexive, however. 
-    *)
+    reduced in [t], yielding [u]. The definition of [step] is not
+    reflexive. *)
     
-
 Inductive step : term -> term -> Prop :=
   | step_appl : forall t t',
       t ⊳ t' -> forall u, tm_app t u ⊳ tm_app t' u
@@ -232,9 +194,10 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------ *)
-(** ** Confluence (Church-Rosser) *)
+(** ** Parallel Reduction *)
 
 Reserved Notation "t '⊳⊳' u"  (at level 60).
+Reserved Notation "t '⊳⊳*' u"  (at level 60).
 
 Inductive parstep : term -> term -> Prop :=
   | parstep_type :
@@ -251,8 +214,16 @@ Inductive parstep : term -> term -> Prop :=
       t ⊳⊳ t' -> u ⊳⊳ u' -> tm_app (tm_abs a t) u ⊳⊳ subst 0 u t
   where "t '⊳⊳' u" := (parstep t u).
 
+Inductive mparstep : term -> term -> Prop :=
+  | mparstep_refl : forall t,
+      t ⊳⊳* t
+  | mparstep_step : forall t u v,
+      t ⊳⊳ u -> u ⊳⊳* v -> t ⊳⊳* v
+  where "t '⊳⊳*' u" := (mparstep t u).
+
 #[export]
 Hint Constructors parstep : mltt.
+Hint Constructors mparstep : mltt.
 
 Lemma parstep_refl : forall t,
   t ⊳⊳ t.
@@ -272,80 +243,144 @@ Proof.
   induction 1; eauto with mltt.
 Qed.
 
-Lemma parstep_subst : forall s t s' t',
-  s ⊳⊳ s' -> t ⊳⊳ t' -> subst 0 s t ⊳⊳ subst 0 s' t'.
-Admitted.
+Lemma mparstep_mstep : forall t u,
+  t ⊳⊳* u <-> t ⊳* u.
+Proof.
+  split.
+  - (* -> *)
+    induction 1; auto with mltt.
+    apply parstep_mstep in H.
+    apply mstep_trans with u; assumption.
+  - (* <- *)
+    induction 1; auto with mltt.
+    apply parstep_step in H.
+    apply mparstep_step with u; assumption.
+Qed.
 
-#[local]
-Hint Extern 4 =>
-  match goal with
-  | H: exists w, _ /\ _ |- _ => let w := fresh w in
-                                destruct H as [w [? ?]]
-  end : mltt.
+Lemma mparstep_trans : forall t u v,
+  t ⊳⊳* u -> u ⊳⊳* v -> t ⊳⊳* v.
+Proof.
+  intros t u v Htu.
+  generalize dependent v.
+  induction Htu; eauto with mltt.
+Qed.
 
-Lemma parstep_confluence : forall t u v,
+(* XXX: There is still some machinery require to prove local confluence
+   for parallel reductions *)
+
+Lemma parstep_local_confluence : forall t u v,
   t ⊳⊳ u -> t ⊳⊳ v -> exists w, u ⊳⊳ w /\ v ⊳⊳ w.
 Proof with eauto 16 with core mltt.
   intros t u v Htu.
   generalize dependent v.
   induction Htu; inversion 1; subst...
-  - apply IHHtu1 in H2. apply IHHtu2 in H4...
+  - apply IHHtu1 in H2. apply IHHtu2 in H4... admit.
   - admit.
-  - apply IHHtu1 in H2. apply IHHtu2 in H4...
-  - apply IHHtu1 in H2. apply IHHtu2 in H4...
+  - apply IHHtu1 in H2. apply IHHtu2 in H4... admit.
+  - apply IHHtu1 in H2. apply IHHtu2 in H4... admit.
   - admit.
 Admitted.
 
-Lemma step_confluence : forall t u v,
-  t ⊳ u -> t ⊳ v -> exists w, u ⊳* w /\ v ⊳* w.
+Lemma parstep_confluence_right : forall t u v,
+  t ⊳⊳ u -> t ⊳⊳* v -> exists w, u ⊳⊳* w /\ v ⊳⊳* w.
 Proof.
   intros t u v Htu Htv.
-  assert (H: exists w, u ⊳⊳ w /\ v ⊳⊳ w) by
-    eauto using parstep_step, parstep_confluence.
-  destruct H as [w [H1 H2]]. 
-  eauto using parstep_mstep.
+  generalize dependent u.
+  induction Htv; eauto with mltt.
+  intros u' Htu'.
+
+(** At this point, we have the following:
+
+           t
+         /   \
+        u'    u
+               \*
+                v
+ 
+    The ascii diagram above flows from top to bottom. Each edge
+    represents a parallel step from one term to another.  Edges with
+    an asterisk represent multi-step parallel reduction.
+    
+    We can flush out a little more of the graph by using the theorem
+    of local confluence for parallel reduction. We can prove the
+    existence of a term `w`, which completes the diamond formed
+    between the terms `t`, `u`, and `u'`:
+    
+           t
+         /   \
+        u'     u
+         \   /   \*
+           w      v
+ *)  
+
+  assert (P: exists w, u ⊳⊳ w /\ u' ⊳⊳ w) by
+    eauto using parstep_local_confluence.
+  destruct P as [w [H1 H2]].
+
+(** Now we can see that the triangle formed by `w`, `u`, and `v`
+    forms the top half of a diamond. We can apply the induction
+    hypothesis to prove the existence of a term `x` which completes
+    our proof:
+    
+           t
+         /   \
+        u'     u
+         \   /   \*
+           w      v
+             \*  /*
+               x
+     
+*)
+  
+  apply IHHtv in H1.
+  destruct H1 as [x [Hwx Hvx]].
+  exists x. eauto with mltt.
 Qed.
+
+Theorem parstep_confluence : forall t u v,
+  t ⊳⊳* u -> t ⊳⊳* v -> exists w, u ⊳⊳* w /\ v ⊳⊳* w.
+Proof.
+  intros t u v Htu.
+  generalize dependent v.
+  induction Htu; eauto with mltt.
+  - intros u' Htu'.
+    assert (P: exists w, u ⊳⊳* w /\ u' ⊳⊳* w) by
+      eauto using parstep_confluence_right.
+    destruct P as [w [H1 H2]].
+    apply IHHtu in H1.
+    destruct H1 as [x [Hwx Hvx]].
+    assert (u' ⊳⊳* x) by
+      solve [eapply mparstep_trans; eauto].
+    exists x. auto.
+Qed.
+
+(** Now we can finally prove confluence. Knowing that parallel multi-step
+    reduction and non-parallel multi-step reduction are equivalent
+    (i.e. `mparstep_mstep`), we can leverage `parstep_confluence` to prove
+    that the reduction of terms is confluent. *)
 
 Theorem confluence : forall t u v,
   t ⊳* u -> t ⊳* v -> exists w, u ⊳* w /\ v ⊳* w.
 Proof.
-  intros t u v Htu.
-  generalize dependent v.
-  induction Htu.
-  - intro v. exists v; eauto with mltt.
-  - admit.
-Admitted.
+  intros t u v Htu Htv.
+  assert (H: exists w, u ⊳⊳* w /\ v ⊳⊳* w). {
+    apply mparstep_mstep in Htu.
+    apply mparstep_mstep in Htv.
+    eauto using parstep_confluence.
+  }
+  destruct H as [w [H1 H2]].
+  apply mparstep_mstep in H1.
+  apply mparstep_mstep in H2.
+  exists w. exact (conj H1 H2).
+Qed.
 
 #[export]
 Hint Resolve confluence : mltt.
 
+(** ------------------------------------------------------------------------ *)
+(** ** Confluence (Church-Rosser) *)
+
 Reserved Notation "t '≃' u" (at level 50).
-
-Inductive equiv (t : term) : term -> Prop :=
-  | equiv_refl :
-      t ≃ t
-  | equiv_reduction : forall u,
-      t ≃ u -> forall v, u ⊳ v -> t ≃ v
-  | equiv_expansion : forall u,
-      t ≃ u -> forall v, v ⊳ u -> t ≃ v
-  where "t '≃' u" := (equiv t u).
-
-#[export]
-Hint Constructors equiv : mltt.
-
-
-Definition equiv_diamond_ind
-     : forall (t : term) (P : term -> Prop),
-       P t ->
-       (forall u : term, t ≃ u -> P u -> forall v w : term, v ⊳* u /\ v ⊳* w -> P w) ->
-       forall u : term, t ≃ u -> P u.
-Proof.
-  intros.
-  induction H1; eauto with mltt.
-Qed.
-
-(*
-Check equiv_ind.
 
 Inductive equiv (t : term) : term -> Prop :=
   | equiv_refl :
@@ -356,56 +391,7 @@ Inductive equiv (t : term) : term -> Prop :=
 
 #[export]
 Hint Constructors equiv : mltt.
-*)
 
-(** Note that eta equivalence is not included in equivalence, as this
-    breaks the church rosser property. This is mentioned in Luo with
-    examples in the beginning of chapter 3.
-
-    More on eta-reduction and Church Rosser in Geuvers 93:
-      http://www.cs.ru.nl/~herman/PUBS/LICS92_CRbh.pdf
-    
-    http://www.cs.ru.nl/~herman/PUBS/Proefschrift.pdf
-
-    Initial discussion of eta-reduction issues:
-      https://www.win.tue.nl/automath/archive/pdf/aut031.pdf *)
-
-(*
-Lemma equiv_reduction : forall t u,
-  t ⊳ u -> t ≃ u.
-Proof.
-  eauto with mltt.
-Qed.
-*)
-
-(*
-Lemma equiv_reduction : forall t u,
-  t ≃ u -> forall v, u ⊳* v -> t ≃ v.
-Proof.
-  eauto with mltt.
-Qed.
-
-Lemma equiv_expansion : forall t u,
-  t ≃ u -> forall v, v ⊳* u -> t ≃ v.
-Proof.
-  eauto with mltt.
-Qed.
-*)
-
-Lemma equiv_transitive : forall t u v,
-  t ≃ u -> u ≃ v -> t ≃ v.
-Proof.
-  induction 2 using equiv_diamond_ind; eauto with mltt.
-Qed.
-
-Lemma equiv_symmetric : forall t u,
-  t ≃ u -> u ≃ t.
-Proof.
-  induction 1.
-  - trivial with mltt.
-  - assert (w ≃ u). { destruct H0. eauto with mltt. }
-    apply equiv_transitive with u; assumption.
-Qed.
 
 Lemma church_rosser : forall t u,
   t ≃ u -> exists z, t ⊳* z /\ u ⊳* z.
@@ -437,7 +423,8 @@ Proof.
                             \ / \ /
                              x   y
                               \ /
-                               z   *)
+                               z
+ *)
 
     (* construct [y] *)
     assert (Hy: exists y, u ⊳* y /\ w ⊳* y)
@@ -451,52 +438,3 @@ Proof.
 
     exists z. eauto using mstep_trans.
 Qed.
-
-Inductive redk : term -> term -> Prop :=
-  | redk_beta : forall a t u,
-      redk (tm_app (tm_abs a t) u) (subst 0 u t)
-  | redk_appl : forall t t',
-      redk t t' -> forall u, redk (tm_app t u) (tm_app t' u).
-
-Lemma redk_step : forall t u,
-  redk t u -> t ⊳ u.
-Proof.
-  induction 1; eauto with mltt.
-Qed.
-
-
-Inductive sn (t : term) :=
-  | sn_intro : (forall u, t ⊳ u -> sn u) -> sn t.
-
-Lemma sn_normal : forall t,
-  normal t -> sn t.
-Proof.
-  constructor. intros.
-  exfalso. eauto using normal_not_reducible.
-Qed.
-
-Lemma sn_induction : forall P,
-  (forall t, (forall u, t ⊳ u -> P u) -> P t) ->
-  forall t, sn t -> P t.
-Proof.
-  intros. induction H.
-  eauto with mltt.
-Qed.
-
-
-Check sn_ind.
-
-
-
-Inductive keyredex : term -> Prop :=
-  | keyredex_here : forall a t u,
-      keyredex (tm_app (tm_abs a t) u)
-  | keyredex_there : forall t u,
-      keyredex t -> keyredex (tm_app t u).
-
-
-
-
-Inductive cumulativity : nat -> term -> term -> Prop :=
-  | cumu_equiv : forall t u,
-      t ≃ u -> cumulativity 0 t u.
